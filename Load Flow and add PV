@@ -1,0 +1,202 @@
+import powerfactory
+app = powerfactory.GetApplicationExt()
+print = app.PrintInfo
+app.ClearOutputWindow()
+
+script = app.GetCurrentScript()  #Script open
+print(script.uretim_gucu)
+
+secim = app.GetCurrentSelection()  #Substation or busbar selection
+
+obje = secim[0]                   
+print(f"Seçilen İstasyon: {obje}")
+secim_icerik = obje.GetContents()  #make a list from subcontents in station which choose
+
+print("Seçilen istasyona ait tüm alt içerikler:")
+for i in secim_icerik:
+  print(i)
+  
+ 
+sbara = []              #busbars in substation which choose
+shat = []               #choosen line/s
+
+for x in secim_icerik:
+  if x.GetClassName() == "ElmTerm" :   #get the busbar
+    sbara.append(x)                     #add to list
+
+print("Seçilen istasyona ait baralar:")
+for q in sbara:
+  print(q) 
+
+for h in secim:
+  if h.GetClassName() == "ElmLne" :
+    shat.append(h)
+    
+print("Seçilen hatlar:")
+for h2 in shat:
+  print(h2)
+
+ref_fider = sbara[0].cpFeed              #feeder information of busbar
+print(f"Referans fider belirlendi: {ref_fider}")         #print feeder
+
+elements = ref_fider.GetAll()          #all elements in reference feeder
+hatlar = []                            #relevant lines in feeder
+baralar = []                           #relevant busbars in feeder
+
+for element in elements:
+  if element.GetClassName() == "ElmLne" :
+   hatlar.append(element)
+  elif element.GetClassName() == "ElmTerm" : 
+   baralar.append(element)
+
+bulunan_hat_sayisi = len(hatlar)
+print(f"İlgili fiderde tespit edilen hat sayısı: {bulunan_hat_sayisi}")
+
+
+bulunan_bara_sayisi = len(baralar)
+print(f"İlgili fiderde tespit edilen bara sayısı: {bulunan_bara_sayisi}")
+
+print("Referans yük akışı çalıştırılıyor.")
+
+LL1_dic = {}              #fist LF line data list.
+LP1_dic = {}
+BV1_dic = {}              #first LF busbar data list
+
+ldf = app.GetFromStudyCase('ComLdf')
+
+ldf.iopt_fls = 0
+ldf.scLoadFac = 0
+ldf.scGenFac = 100
+
+while True:
+    err = ldf.Execute()
+
+    if err == 0:
+        print(f"Yük akışı başarılı. LoadFac = {ldf.scLoadFac}")
+        break
+    else:
+        ldf.scLoadFac += 10
+        print(f"Hata alındı, LoadFac {ldf.scLoadFac} yapıldı.")
+
+        if ldf.scLoadFac > 100:
+            raise Exception("Yük akışı %100 yüke kadar çalışmadı")
+
+for hat in hatlar:
+  if not hat.HasAttribute('c:loading'):
+    continue
+  LL1_dic[hat.loc_name]=hat.GetAttribute('c:loading')
+  LP1_dic[hat.loc_name]=(hat.GetAttribute('c:Ploss')*1000)
+  
+  
+for  bara in baralar:
+  if not bara.HasAttribute('m:u'):
+    continue
+  BV1_dic[bara.loc_name]=bara.GetAttribute('m:u')
+  
+
+
+
+SLL1_dic = []
+SBV1_dic = []
+
+
+
+for kablo in shat:
+  SLL1_dic.append(kablo.GetAttribute('c:loading'))
+  
+
+#######################----FİRST LOAD FLOW OVER and add PV----##################################################
+
+print("Yük akışı tamamlandı, üretim santrali ekleniyor...")
+
+print(f"Otomatik bağlantı yapılacak ges gücü {script.uretim_gucu} kW seçilmiştir.")
+
+stations = []
+for sec in secim:
+  if sec.GetClassName() == 'ElmTrfstat':
+    stations.append(sec)
+
+isim = script.tesis_ismi
+    
+for station in stations:
+  
+  uretim = station.CreateObject('ElmPvsys',isim)
+  uretim.pgini= script.uretim_gucu
+
+  uretim_bara= station.pBusbar
+  hucrecik = uretim_bara.CreateObject('StaCubic', 'g')
+  hucrecik.obj_id = uretim
+  print(f"{station} -> {uretim}, {hucrecik}")
+
+
+print(f"{isim} bağlandı")
+
+#######################----SECOND LOAD FLOW START----##################################################
+
+print("İkinci yük akışı çalıştırılıyor.")
+
+LL2_dic = {}              #second LF line data (line loads LL)list.
+LP2_dic = {}
+BV2_dic = {}              #second LF busbar data (base voltages BV) list
+
+DLL = {}
+DLP = {}
+DBV = {}
+
+ldf = app.GetFromStudyCase('ComLdf')
+
+ldf.iopt_fls = 0
+ldf.scLoadFac = 0
+ldf.scGenFac = 100
+
+while True:
+    err = ldf.Execute()
+
+    if err == 0:
+        print(f"Yük akışı başarılı. LoadFac = {ldf.scLoadFac}")
+        break
+    else:
+        ldf.scLoadFac += 10
+        print(f"Hata alındı, LoadFac {ldf.scLoadFac} yapıldı.")
+
+        if ldf.scLoadFac > 100:
+            raise Exception("Yük akışı %100 yüke kadar çalışmadı")
+
+print(f"{'HAT İSMİ':<42}{'İLETKEN TİPİ':<18}{'MESAFE':<10}{'LL1':<6}{'LL2':<6}{'DL':<11}{'LP1':<7}{'LP2':<9}{'DLP':<7}")  
+for hat1 in hatlar:
+  if not hat1.HasAttribute('c:loading'):
+    continue
+  LL2_dic[hat1.loc_name]=hat1.GetAttribute('c:loading')
+  LP2_dic[hat1.loc_name]=hat1.GetAttribute('c:Ploss')
+  load2=hat1.GetAttribute('c:loading')
+  ploss2=(hat1.GetAttribute('c:Ploss')*1000)
+  
+  dload = load2-LL1_dic[hat1.loc_name]
+  dloss = ploss2-LP1_dic[hat1.loc_name]
+  print(f"{hat1.loc_name:<40} {hat1.typ_id.loc_name:<18} {hat1.dline:<3.2f} km {LL1_dic[hat1.loc_name]:<6.3f} {load2:<6.3f} {dload:<9.3f} {LP1_dic[hat1.loc_name]:<7.4f} {ploss2:<7.4f} {dloss:<7.4f}")
+  
+
+sv_rise = []  #the busbars which has voltage rise
+print("oooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo")
+print("oooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo")
+print("oooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo")
+
+print(f"{'BARA İSMİ':<41}{'Bpu1':<7}{'Bpu2':<7}{'Dpu':<6}")  
+
+for  bara1 in baralar:
+  if not bara1.HasAttribute('m:u'):
+    continue
+  if bara1.GetAttribute('m:u') > 1.07:
+    sv_rise.append(bara1)
+  BV2_dic[bara.loc_name]=bara1.GetAttribute('m:u')
+  bv2=bara1.GetAttribute('m:u')
+  
+  dbv2 = bv2 - BV1_dic[bara1.loc_name]
+  print(f"{bara1.loc_name:<40} {BV1_dic[bara1.loc_name]:<6.3f} {bv2:<6.3f} {dbv2:<9.3f}")
+
+sc_v_rise=len(sv_rise)
+
+print(f"Gerilim yükselmesi bulunan  bara sayısı:{sc_v_rise}")
+
+#######################----SECOND LOAD FLOW OVER----##################################################
+
